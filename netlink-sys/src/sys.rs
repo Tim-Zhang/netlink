@@ -263,6 +263,51 @@ impl Socket {
         Ok(res as usize)
     }
 
+    pub fn recv_all(&self) -> Result<(Vec<u8>, SocketAddr)> {
+        let mut sa: libc::sockaddr_nl = unsafe { mem::zeroed::<libc::sockaddr_nl>() };
+
+        let mut iov = libc::iovec {
+            iov_base: 0 as *mut libc::c_void,
+            iov_len: 0 as libc::size_t,
+        };
+
+        unsafe {
+            let mut h = mem::zeroed::<libc::msghdr>();
+            h.msg_name = &mut sa as *mut libc::sockaddr_nl as *mut libc::c_void;
+            h.msg_namelen = mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
+            h.msg_iov = &mut iov as *mut libc::iovec;
+            h.msg_iovlen = 1;
+
+            let mut rlen = libc::recvmsg(
+                self.0,
+                &mut h as *mut libc::msghdr,
+                libc::MSG_PEEK | libc::MSG_TRUNC,
+            );
+
+            if rlen < 0 {
+                return Err(Error::last_os_error());
+            }
+
+            let mut v: Vec<u8> = vec![0; rlen as usize];
+
+            iov.iov_base = v.as_mut_ptr() as *mut libc::c_void;
+            iov.iov_len = rlen as libc::size_t;
+
+            rlen = libc::recvmsg(self.0, &mut h as *mut libc::msghdr, 0);
+            if rlen < 0 {
+                return Err(Error::last_os_error());
+            }
+
+            if h.msg_flags & libc::MSG_TRUNC != 0 {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+
+            v.resize(rlen as usize, 0);
+
+            Ok((v, SocketAddr::new(sa.nl_pid, sa.nl_groups)))
+        }
+    }
+
     pub fn send_to(&self, buf: &[u8], addr: &SocketAddr, flags: libc::c_int) -> Result<usize> {
         let (addr_ptr, addr_len) = addr.as_raw();
         let buf_ptr = buf.as_ptr() as *const libc::c_void;
